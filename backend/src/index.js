@@ -18,6 +18,7 @@ import './models/User.js';
 import './models/Activity.js';
 import './models/Goal.js';
 import './models/RacePB.js';
+import './models/CalendarEvent.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -26,12 +27,14 @@ import coachRoutes from './routes/coach.js';
 import userRoutes from './routes/user.js';
 import goalRoutes from './routes/goals.js';
 import racePBRoutes from './routes/racePBs.js';
+import calendarRoutes from './routes/calendar.js';
 
 // Import services
 import { syncAllUsersActivities } from './services/stravaSync.js';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const DEFAULT_PORT = 3001;
+const PORT = Number(process.env.PORT || DEFAULT_PORT);
 
 // Trust Heroku's reverse proxy (required for secure cookies & sessions)
 if (process.env.NODE_ENV === 'production') {
@@ -185,6 +188,7 @@ app.use('/api/coach', coachRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/goals', goalRoutes);
 app.use('/api/race-pbs', racePBRoutes);
+app.use('/api/calendar', calendarRoutes);
 
 // Serve static files from React app in production
 if (process.env.NODE_ENV === 'production') {

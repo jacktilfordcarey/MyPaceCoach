@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Activity, LayoutDashboard, ListChecks, MessageCircle, User, LogOut, Menu, X, Trophy, Sun, Moon } from 'lucide-react'
+import { Activity, LayoutDashboard, CalendarRange, MessageCircle, User, LogOut, Menu, X, Trophy, Sun, Moon } from 'lucide-react'
 import { auth } from '../api'
 import useTheme from '../hooks/useTheme'
 
@@ -32,7 +32,7 @@ export default function Layout({ children, user }) {
     { name: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
     { name: 'Activities', to: '/activities', icon: Activity },
     { name: 'AI Coach', to: '/coach', icon: MessageCircle },
-    { name: 'Goals', to: '/goals', icon: ListChecks },
+    { name: 'Calendar', to: '/goals', icon: CalendarRange },
     { name: 'Race PBs', to: '/race-pbs', icon: Trophy },
     { name: 'Profile', to: '/profile', icon: User }
   ]

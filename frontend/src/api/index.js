@@ -46,6 +46,14 @@ export const goals = {
   generatePlan: (id) => api.post(`/goals/${id}/plan`)
 };
 
+// Calendar endpoints
+export const calendar = {
+  getAll: () => api.get('/calendar'),
+  create: (data) => api.post('/calendar', data),
+  update: (id, data) => api.put(`/calendar/${id}`, data),
+  delete: (id) => api.delete(`/calendar/${id}`)
+};
+
 // User endpoints
 export const user = {
   getProfile: () => api.get('/user/profile'),

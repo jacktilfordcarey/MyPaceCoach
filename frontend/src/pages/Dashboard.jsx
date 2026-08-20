@@ -167,15 +167,17 @@ export default function Dashboard() {
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-teal-600 border-t-transparent"></div>
             </div>
           ) : (
-            <div className="flex-1 flex flex-col">
-              <div className="flex-1 rounded-lg p-4 text-sm leading-relaxed whitespace-pre-line overflow-y-auto max-h-[250px]"
-                style={{ borderLeft: '3px solid #0d9488', backgroundColor: 'var(--bg-surface)', color: 'var(--text-secondary)' }}>
-                {insights?.insights}
+            insights?.insights ? (
+              <div className="flex-1 flex flex-col">
+                <div className="flex-1 rounded-lg p-4 text-sm leading-relaxed whitespace-pre-line overflow-y-auto max-h-[250px]"
+                  style={{ borderLeft: '3px solid #0d9488', backgroundColor: 'var(--bg-surface)', color: 'var(--text-secondary)' }}>
+                  {insights.insights}
+                </div>
+                <button className="btn-primary w-full mt-4 text-sm" onClick={() => window.location.href = '/coach'}>
+                  Chat with Coach
+                </button>
               </div>
-              <button className="btn-primary w-full mt-4 text-sm" onClick={() => window.location.href = '/coach'}>
-                Chat with Coach
-              </button>
-            </div>
+            ) : null
           )}
         </div>
       </div>

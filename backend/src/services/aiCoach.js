@@ -5,11 +5,20 @@ import Goal from '../models/Goal.js';
 import User from '../models/User.js';
 import RacePB from '../models/RacePB.js';
 
-const openrouter = new OpenAI({
-  baseURL: 'https://openrouter.ai/api/v1',
-  apiKey: process.env.OPENROUTER_API_KEY,
-  timeout: 12000, // 12s per request to stay under Heroku's 30s
-});
+const openrouterApiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+const openrouter = openrouterApiKey
+  ? new OpenAI({
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: openrouterApiKey,
+      timeout: 12000,
+    })
+  : null;
+
+function ensureAiConfigured() {
+  if (!openrouter) {
+    throw new Error('OPENROUTER_API_KEY or OPENAI_API_KEY is not configured.');
+  }
+}
 
 const AI_MODELS = [
   'nvidia/nemotron-3-nano-30b-a3b:free',
@@ -19,6 +28,7 @@ const AI_MODELS = [
 
 // Try each model in order until one succeeds
 async function aiComplete(params) {
+  ensureAiConfigured();
   let lastError;
   for (const model of AI_MODELS) {
     try {
@@ -139,20 +149,21 @@ ${goals.length > 0 ? goals.map(g => `- ${g.title} (${g.type})`).join('\n') : 'No
 
 ${userMessage ? `Runner's question: ${userMessage}` : ''}
 
-Respond with EXACTLY 4-6 bullet points. Each bullet must start with "- " and be one sentence max. No introductions, no conclusions, no headers, no paragraphs. Just the bullets.
+Use only the actual training details in this prompt. Interpret the data and focus on patterns, consistency, workload balance, long-run support, pacing, and recovery. You may include numbers only when they help explain the coaching insight, but do not turn the answer into a raw stats recap. Do not invent mileage, race times, or generic coaching phrases. Start with the exact marker "bullets:" and then provide EXACTLY 4-6 bullet points, each starting with "- " and containing one short sentence that is a coaching insight based on the data. Use only the content after "bullets:". Ignore any earlier text, instructions, headers, or notes. Do not include any reasoning, analysis, thought process, hidden steps, explanations, or self-commentary. Never repeat phrases like "we need", "must", "no extra text", "exactly 4-6", "bullet points", "coach insights", "this is the output", "use only actual training details", "no greetings", or similar instructions. Do not use phrases like "I think", "I believe", "this suggests", "it seems", "it appears", "maybe", "probably", "we should", or "analysis". If you cannot give a clean bullet-only answer, return nothing. No introductions, no conclusions, no headers, no paragraphs, no extra text, no emojis, no markdown.
 `;
 
   try {
     const completion = await aiComplete({
       messages: [
-        { role: 'system', content: 'You are a running coach. You MUST respond with only 4-6 bullet points starting with "- ". One short sentence per bullet. No greetings, no sign-offs, no headers, no paragraphs, no emojis, no markdown. Just bullet points.' },
+        { role: 'system', content: 'You are a running coach using only the runner\'s actual training data. Start with the exact marker "bullets:" and then return only 4-6 bullet points starting with "- ". Each bullet must be a brief coaching insight grounded in the training pattern, and numbers may be included only when they support the insight. Ignore all earlier instruction text, headings, and notes. Do not include any reasoning, analysis, thought process, hidden steps, explanations, or meta-language. Never echo or restate instructions such as "we need", "must", "no extra text", "exactly 4-6", "bullet points", "coach insights", "this is the output", "use only actual training details", or "no greetings". Do not use phrases like "I think", "I believe", "this suggests", "it seems", "it appears", "maybe", "probably", "we should", or "analysis". If you cannot provide a clean bullet-only answer, return nothing. No greetings, no sign-offs, no headers, no paragraphs, no markdown, no emoji.' },
         { role: 'user', content: context }
       ],
       max_tokens: 250
     });
 
+    const rawInsights = completion.choices[0]?.message?.content || 'No insights available.';
     return {
-      insights: stripFormatting(completion.choices[0]?.message?.content || 'No insights available.'),
+      insights: normalizeInsightBullets(rawInsights),
       analysis
     };
   } catch (error) {
@@ -380,6 +391,56 @@ function stripFormatting(text) {
     .replace(/---+/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function normalizeInsightBullets(text) {
+  const raw = stripFormatting(text || '').replace(/\r/g, '');
+  const candidate = (() => {
+    const markerMatch = raw.match(/\bbullets\s*:\s*([\s\S]*)/i);
+    return markerMatch ? markerMatch[1] : raw;
+  })();
+
+  const lines = candidate
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^[-*•]\s*/, '').trim())
+    .filter(Boolean);
+
+  const rejectPattern = /(coach insights|we need|must|no extra text|exactly 4-6|bullet points|use only actual training details|no greetings|i think|i believe|this suggests|it seems|it appears|maybe|probably|we should|analysis|reasoning|thought process|summary|based on the data|in summary|overall summary)/i;
+
+  const bullets = [];
+  for (const line of lines) {
+    if (rejectPattern.test(line)) continue;
+    if (/^(here|overall|summary|check|compare|review|consider)/i.test(line)) continue;
+    if (line.length < 20) continue;
+
+    const clean = line
+      .replace(/^['\"“”]+|['\"“”]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!clean) continue;
+    const finalLine = clean.endsWith('.') || clean.endsWith('!') || clean.endsWith('?') ? clean : `${clean}.`;
+    bullets.push(`- ${finalLine}`);
+
+    if (bullets.length >= 6) break;
+  }
+
+  if (bullets.length >= 1 && bullets.length <= 6) {
+    return bullets.join('\n');
+  }
+
+  const fallbackBullets = lines
+    .filter(line => !rejectPattern.test(line))
+    .filter(line => !/^(here|overall|summary|the runner|coach|training summary)/i.test(line))
+    .map(line => {
+      const clean = line.replace(/^['\"“”]+|['\"“”]+$/g, '').replace(/\s+/g, ' ').trim();
+      return `- ${clean.endsWith('.') || clean.endsWith('!') || clean.endsWith('?') ? clean : `${clean}.`}`;
+    })
+    .slice(0, 6);
+
+  return fallbackBullets.length >= 1 && fallbackBullets.length <= 6 ? fallbackBullets.join('\n') : '';
 }
 
 // Helper function to format pace
