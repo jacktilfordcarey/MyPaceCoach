@@ -6,7 +6,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Activities from './pages/Activities'
 import Coach from './pages/Coach'
-import Goals from './pages/Goals'
+import Calendar from './pages/Calendar'
 import Profile from './pages/Profile'
 import RacePBs from './pages/RacePBs'
 
@@ -37,7 +37,8 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/activities" element={<Activities />} />
         <Route path="/coach" element={<Coach />} />
-        <Route path="/goals" element={<Goals />} />
+        <Route path="/calendar" element={<Calendar />} />
+        <Route path="/goals" element={<Navigate to="/calendar" replace />} />
         <Route path="/race-pbs" element={<RacePBs />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/" element={<Navigate to="/dashboard" replace />} />

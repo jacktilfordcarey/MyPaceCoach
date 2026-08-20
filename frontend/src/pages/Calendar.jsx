@@ -28,7 +28,7 @@ import {
   subMonths
 } from 'date-fns'
 
-export default function Goals() {
+export default function CalendarPage() {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [showAddModal, setShowAddModal] = useState(false)
@@ -288,23 +288,56 @@ export default function Goals() {
 }
 
 function AddEventModal({ event, onClose, onSubmit, isSubmitting }) {
+  const TRACK_DISTANCE_OPTIONS = [
+    '60m', '100m', '110m Hurdle', '150m', '200m', '300m', '400m', '400m Hurdle', '600m',
+    '800m', '1000m', '1500m', 'Mile', '2000m', '3000m', '3000m Steeple', '2 Mile', '5000m', '10000m', 'Custom distance'
+  ]
+
+  const ROAD_DISTANCE_OPTIONS = ['5k', '10k', 'HM', 'M', 'Ultra', 'Custom distance']
+
+  const defaultRaceCategory = (() => {
+    if (!event?.raceType) return 'Road'
+    if (event.raceType.toLowerCase().includes('track')) return 'Track'
+    if (event.raceType.toLowerCase().includes('xc')) return 'XC'
+    return 'Road'
+  })()
+
+  const defaultRaceDistance = (() => {
+    if (!event?.raceType) return '5k'
+    const match = String(event.raceType).match(/(60m|100m|110m Hurdle|150m|200m|300m|400m|400m Hurdle|600m|800m|1000m|1500m|Mile|2000m|3000m|3000m Steeple|2 Mile|5000m|10000m|5k|10k|HM|M|Ultra|[\d.]+\s*(km|mi|m|k|mile|miles))/i)
+    return match ? match[1] : '5k'
+  })()
+
   const [formData, setFormData] = useState({
     title: event?.title || '',
     description: event?.description || '',
     category: event?.type === 'race' ? 'race' : 'training',
-    raceType: event?.raceType || '5K',
+    raceCategory: defaultRaceCategory,
+    raceDistance: defaultRaceDistance,
+    raceType: event?.raceType || 'Road • 5k',
     targetTime: event?.targetTime || '',
     date: event?.eventDate || event?.raceDate ? format(new Date(event?.eventDate || event?.raceDate), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd')
   })
 
+  const distanceOptions = formData.raceCategory === 'Track' ? TRACK_DISTANCE_OPTIONS : formData.raceCategory === 'Road' ? ROAD_DISTANCE_OPTIONS : []
+  const showCustomDistanceInput = formData.category === 'race' && (formData.raceCategory === 'XC' || formData.raceDistance === 'Custom distance')
+
   const handleSubmit = (e) => {
     e.preventDefault()
+
+    const resolvedDistance = formData.category === 'race'
+      ? formData.raceCategory === 'XC'
+        ? (formData.raceDistance || 'Enter distance')
+        : formData.raceDistance === 'Custom distance'
+          ? (formData.customDistance || 'Custom distance')
+          : formData.raceDistance
+      : 'Training Session'
 
     const payload = {
       title: formData.title,
       description: formData.description,
       type: formData.category === 'race' ? 'race' : 'training',
-      raceType: formData.category === 'race' ? formData.raceType : 'Training Session',
+      raceType: formData.category === 'race' ? `${formData.raceCategory} • ${resolvedDistance}` : 'Training Session',
       targetTime: formData.targetTime || '',
       eventDate: formData.date,
       raceDate: formData.date,
@@ -336,34 +369,70 @@ function AddEventModal({ event, onClose, onSubmit, isSubmitting }) {
             </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>{formData.category === 'race' ? 'Race distance' : 'Session type'}</label>
-              <select value={formData.raceType} onChange={(e) => setFormData({ ...formData, raceType: e.target.value })} className="input">
-                {formData.category === 'race' ? (
-                  <>
-                    <option value="5K">5K</option>
-                    <option value="10K">10K</option>
-                    <option value="Half Marathon">Half Marathon</option>
-                    <option value="Marathon">Marathon</option>
-                    <option value="10 Mile">10 Mile</option>
-                  </>
+          {formData.category === 'race' ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Race type</label>
+                <select value={formData.raceCategory} onChange={(e) => {
+                  const nextCategory = e.target.value
+                  setFormData({
+                    ...formData,
+                    raceCategory: nextCategory,
+                    raceDistance: nextCategory === 'Track' ? '60m' : nextCategory === 'Road' ? '5k' : 'Enter distance',
+                    customDistance: ''
+                  })
+                }} className="input">
+                  <option value="Road">Road</option>
+                  <option value="Track">Track</option>
+                  <option value="XC">XC</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Distance</label>
+                {formData.raceCategory === 'XC' ? (
+                  <input
+                    type="text"
+                    value={formData.raceDistance}
+                    onChange={(e) => setFormData({ ...formData, raceDistance: e.target.value })}
+                    className="input"
+                    placeholder="Enter distance"
+                  />
                 ) : (
-                  <>
-                    <option value="Tempo">Tempo</option>
-                    <option value="Intervals">Intervals</option>
-                    <option value="Long Run">Long Run</option>
-                    <option value="Recovery">Recovery</option>
-                    <option value="Steady State">Steady State</option>
-                  </>
+                  <select value={formData.raceDistance} onChange={(e) => setFormData({ ...formData, raceDistance: e.target.value })} className="input">
+                    {distanceOptions.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
                 )}
+
+                {formData.raceCategory !== 'XC' && formData.raceDistance === 'Custom distance' && (
+                  <input
+                    type="text"
+                    value={formData.customDistance || ''}
+                    onChange={(e) => setFormData({ ...formData, customDistance: e.target.value })}
+                    className="input mt-2"
+                    placeholder="Enter custom distance"
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Session type</label>
+              <select value={formData.raceType} onChange={(e) => setFormData({ ...formData, raceType: e.target.value })} className="input">
+                <option value="Tempo">Tempo</option>
+                <option value="Intervals">Intervals</option>
+                <option value="Long Run">Long Run</option>
+                <option value="Recovery">Recovery</option>
+                <option value="Steady State">Steady State</option>
               </select>
             </div>
+          )}
 
-            <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Target time</label>
-              <input type="text" value={formData.targetTime} onChange={(e) => setFormData({ ...formData, targetTime: e.target.value })} className="input" placeholder="HH:MM:SS" />
-            </div>
+          <div>
+            <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Target time</label>
+            <input type="text" value={formData.targetTime} onChange={(e) => setFormData({ ...formData, targetTime: e.target.value })} className="input" placeholder="HH:MM:SS" />
           </div>
 
           <div>

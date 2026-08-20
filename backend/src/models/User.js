@@ -25,7 +25,12 @@ const User = sequelize.define('User', {
     field: 'last_name'
   },
   email: {
-    type: DataTypes.STRING
+    type: DataTypes.STRING,
+    unique: true
+  },
+  passwordHash: {
+    type: DataTypes.STRING,
+    field: 'password_hash'
   },
   profile: {
     type: DataTypes.STRING

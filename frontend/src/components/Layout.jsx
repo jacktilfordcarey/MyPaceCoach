@@ -32,7 +32,7 @@ export default function Layout({ children, user }) {
     { name: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
     { name: 'Activities', to: '/activities', icon: Activity },
     { name: 'AI Coach', to: '/coach', icon: MessageCircle },
-    { name: 'Calendar', to: '/goals', icon: CalendarRange },
+    { name: 'Calendar', to: '/calendar', icon: CalendarRange },
     { name: 'Race PBs', to: '/race-pbs', icon: Trophy },
     { name: 'Profile', to: '/profile', icon: User }
   ]

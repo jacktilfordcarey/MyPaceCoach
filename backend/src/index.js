@@ -33,8 +33,7 @@ import calendarRoutes from './routes/calendar.js';
 import { syncAllUsersActivities } from './services/stravaSync.js';
 
 const app = express();
-const DEFAULT_PORT = 3001;
-const PORT = Number(process.env.PORT || DEFAULT_PORT);
+const PORT = Number(process.env.PORT || 3000);
 
 // Trust Heroku's reverse proxy (required for secure cookies & sessions)
 if (process.env.NODE_ENV === 'production') {
@@ -176,8 +175,8 @@ async function startServer() {
     }
   }
 
-  app.listen(PORT, () => {
-    console.log(`🚀 MyPace backend running on http://localhost:${PORT}`);
+  app.listen(PORT, '127.0.0.1', () => {
+    console.log(`🚀 MyPace backend running on http://127.0.0.1:${PORT}`);
   });
 }
 

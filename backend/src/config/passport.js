@@ -24,6 +24,11 @@ if (stravaClientId && stravaClientSecret && stravaCallbackUrl) {
         if (!response.ok) {
           const errorText = await response.text();
           console.error('Strava API error:', response.status, errorText);
+
+          if (response.status === 429) {
+            return done(new Error('Strava rate limit exceeded. Please try again later or use manual entry.'));
+          }
+
           return done(new Error(`Strava API returned ${response.status}`));
         }
 

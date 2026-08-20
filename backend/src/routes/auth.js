@@ -1,4 +1,5 @@
 import express from 'express';
+import bcrypt from 'bcrypt';
 import passport from 'passport';
 import User from '../models/User.js';
 
@@ -47,31 +48,101 @@ router.get('/strava/callback',
   }
 );
 
-// Manual entry route (no Strava required)
-router.post('/manual', async (req, res) => {
+// Manual sign-up route (no Strava required)
+router.post('/manual/signup', async (req, res) => {
   try {
-    const { username, email } = req.body;
-    
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
+    const { username, email, password } = req.body;
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Username, email, and password are required' });
     }
-    
-    // Create manual user (no Strava integration)
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    const existingUser = await User.findOne({
+      where: { email: email.toLowerCase() }
+    });
+
+    if (existingUser) {
+      return res.status(409).json({ error: 'An account with that email already exists' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
     const user = await User.create({
       stravaId: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      username: username,
-      email: email || null,
+      username,
+      email: email.toLowerCase(),
+      passwordHash,
       firstName: username,
       premium: false
     });
-    
-    // Log the user in via session
+
+    req.login(user, (err) => {
+      if (err) {
+        return res.status(500).json({ error: 'Failed to log in' });
+      }
+      res.status(201).json({ success: true, user });
+    });
+  } catch (error) {
+    console.error('Manual signup error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manual login route
+router.post('/manual/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const user = await User.findOne({
+      where: { email: String(email).toLowerCase() }
+    });
+
+    if (!user || !user.passwordHash) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
     req.login(user, (err) => {
       if (err) {
         return res.status(500).json({ error: 'Failed to log in' });
       }
       res.json({ success: true, user });
     });
+  } catch (error) {
+    console.error('Manual login error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Backward compatibility for older frontend calls
+router.post('/manual', async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+
+    if (username && !password) {
+      return res.status(400).json({ error: 'Please use the manual sign-up or manual login routes' });
+    }
+
+    if (password && email) {
+      return router.stack.some((layer) => layer.route && layer.route.path === '/manual/login')
+        ? res.status(400).json({ error: 'Please use /api/auth/manual/login for login and /api/auth/manual/signup for sign-up.' })
+        : res.status(400).json({ error: 'Please use the manual sign-up or manual login routes' });
+    }
+
+    return res.status(400).json({ error: 'Please use the manual sign-up or manual login routes' });
   } catch (error) {
     console.error('Manual entry error:', error);
     res.status(500).json({ error: error.message });
