@@ -20,11 +20,11 @@ function ensureAiConfigured() {
   }
 }
 
+const configuredModel = process.env.OPENROUTER_MODEL?.trim();
 const AI_MODELS = [
-  'nvidia/nemotron-3-nano-30b-a3b:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'openai/gpt-oss-120b:free',
-];
+  configuredModel,
+  'openrouter/free',
+].filter(Boolean);
 
 // Try each model in order until one succeeds
 async function aiComplete(params) {
