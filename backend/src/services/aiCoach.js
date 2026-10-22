@@ -1,55 +1,85 @@
-import OpenAI from 'openai';
+import { z } from 'zod';
 import { Op } from 'sequelize';
 import Activity from '../models/Activity.js';
 import Goal from '../models/Goal.js';
 import User from '../models/User.js';
 import RacePB from '../models/RacePB.js';
+import { complete, parseJsonOutput } from './llmClient.js';
+import { buildCoachContext, buildSpecialistPrompt } from './contextBuilder.js';
+import { classifySession, computeIntervalQuality, computeWeeklyAnalysis } from './analysis.js';
+import { buildToolResultForPrompt, buildToolSystemPrompt } from './coachTools.js';
 
-const openrouterApiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
-const openrouter = openrouterApiKey
-  ? new OpenAI({
-      baseURL: 'https://openrouter.ai/api/v1',
-      apiKey: openrouterApiKey,
-      timeout: 12000,
+export function buildRecentTrainingProfile(activities = []) {
+  const validRuns = [...activities]
+    .filter((activity) => activity && activity.date && (Number(activity.distance || 0) > 0 || Number(activity.movingTime || 0) > 0))
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const recentRuns = validRuns.slice(0, 12);
+  const recentPaces = recentRuns
+    .map((run) => Number(run.pace ?? run.averagePace ?? 0))
+    .filter((pace) => Number.isFinite(pace) && pace > 0);
+  const recentHr = recentRuns
+    .map((run) => Number(run.averageHeartrate ?? 0))
+    .filter((hr) => Number.isFinite(hr) && hr > 0);
+
+  const avgPace = recentPaces.length ? recentPaces.reduce((sum, pace) => sum + pace, 0) / recentPaces.length : 0;
+  const avgHeartRate = recentHr.length ? recentHr.reduce((sum, hr) => sum + hr, 0) / recentHr.length : 0;
+  const minPace = recentPaces.length ? Math.min(...recentPaces) : 0;
+  const maxPace = recentPaces.length ? Math.max(...recentPaces) : 0;
+
+  const recentQualityPaces = recentRuns
+    .map((run) => {
+      const pace = Number(run.pace ?? run.averagePace ?? 0);
+      const heartRate = Number(run.averageHeartrate ?? 0);
+      if (!Number.isFinite(pace) || pace <= 0) return null;
+      return { pace, heartRate, distanceKm: Number((Number(run.distance || 0) / 1000).toFixed(2)) };
     })
-  : null;
+    .filter(Boolean);
 
-function ensureAiConfigured() {
-  if (!openrouter) {
-    throw new Error('OPENROUTER_API_KEY or OPENAI_API_KEY is not configured.');
-  }
+  return {
+    recentRuns: recentRuns.length,
+    avgPace,
+    avgHeartRate,
+    recentPaceRange: {
+      min: minPace,
+      max: maxPace
+    },
+    recentQualityPaces
+  };
 }
 
-const configuredModel = process.env.OPENROUTER_MODEL?.trim();
-const AI_MODELS = [
-  configuredModel,
-  'openrouter/free',
-].filter(Boolean);
+const RacePredictionSchema = z.object({
+  '800m': z.string(),
+  '5K': z.string(),
+  '10K': z.string(),
+  halfMarathon: z.string(),
+  marathon: z.string(),
+  confidence: z.string()
+});
 
-// Try each model in order until one succeeds
-async function aiComplete(params) {
-  ensureAiConfigured();
-  let lastError;
-  for (const model of AI_MODELS) {
-    try {
-      console.log(`Trying model: ${model}`);
-      const result = await openrouter.chat.completions.create({ ...params, model });
-      const content = result.choices?.[0]?.message?.content;
-      if (content && content.trim().length > 0) {
-        console.log(`Model ${model} succeeded (${content.length} chars)`);
-        return result;
-      }
-      console.log(`Model ${model} returned empty response, trying next...`);
-      continue;
-    } catch (error) {
-      console.log(`Model ${model} failed: ${error.status || error.code} ${error.message}`);
-      lastError = error;
-      continue;
-    }
-  }
-  if (lastError) throw lastError;
-  throw new Error('All models returned empty responses');
+const TrainingPlanSchema = z.object({
+  weeks: z.array(z.object({
+    weekNumber: z.number(),
+    totalDistance: z.number(),
+    runs: z.array(z.object({
+      day: z.string(),
+      type: z.string(),
+      distance: z.number(),
+      description: z.string()
+    }))
+  }))
+});
+
+async function aiComplete({ system, messages, max_tokens = 1024, feature = 'coach', schema }) {
+  return complete({
+    system,
+    messages,
+    maxTokens: max_tokens,
+    feature,
+    schema
+  });
 }
+
 
 /**
  * Analyze training data and provide insights
@@ -154,14 +184,16 @@ Use only the actual training details in this prompt. Interpret the data and focu
 
   try {
     const completion = await aiComplete({
+      system: 'You are a running coach. You MUST respond with only 4-6 bullet points starting with "- ". One short sentence per bullet. No greetings, no sign-offs, no headers, no paragraphs, no emojis, no markdown. Just bullet points.',
       messages: [
         { role: 'system', content: 'You are a running coach using only the runner\'s actual training data. Start with the exact marker "bullets:" and then return only 4-6 bullet points starting with "- ". Each bullet must be a brief coaching insight grounded in the training pattern, and numbers may be included only when they support the insight. Ignore all earlier instruction text, headings, and notes. Do not include any reasoning, analysis, thought process, hidden steps, explanations, or meta-language. Never echo or restate instructions such as "we need", "must", "no extra text", "exactly 4-6", "bullet points", "coach insights", "this is the output", "use only actual training details", or "no greetings". Do not use phrases like "I think", "I believe", "this suggests", "it seems", "it appears", "maybe", "probably", "we should", or "analysis". If you cannot provide a clean bullet-only answer, return nothing. No greetings, no sign-offs, no headers, no paragraphs, no markdown, no emoji.' },
         { role: 'user', content: context }
       ],
-      max_tokens: 250
+      max_tokens: 250,
+      feature: 'insights'
     });
 
-    const rawInsights = completion.choices[0]?.message?.content || 'No insights available.';
+    const rawInsights = completion || 'No insights available.';
     return {
       insights: normalizeInsightBullets(rawInsights),
       analysis
@@ -176,38 +208,108 @@ Use only the actual training details in this prompt. Interpret the data and focu
  * Chat with AI coach
  */
 export async function chatWithCoach(userId, message, conversationHistory = []) {
-  const analysis = await analyzeTraining(userId, 14); // Last 2 weeks
-  const goals = await Goal.findAll({ 
-    where: { userId, status: 'active' } 
+  const activities = await Activity.findAll({
+    where: { userId },
+    order: [['date', 'DESC']]
   });
-  
-  const systemContext = `
-You are an AI running coach named Coach. You have access to the runner's training data:
-- Total runs (last 14 days): ${analysis.totalRuns}
-- Total distance: ${analysis.totalDistance.toFixed(1)} km
-- Weekly average: ${analysis.weeklyAverage.toFixed(1)} km
-- Average pace: ${formatPace(analysis.averagePace)}
-- Active goals: ${goals.map(g => g.title).join(', ') || 'None'}
+  const goals = await Goal.findAll({
+    where: { userId, status: 'active' }
+  });
 
-Provide personalized running advice. Be conversational, supportive, and practical. Use the runner's data to give specific recommendations. Never use emojis or special characters.
-`;
+  const recentActivities = activities.slice(0, 20);
+  const weeks = Array.from({ length: 8 }, (_, idx) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (idx * 7 + 1));
+    const weekStart = new Date(date);
+    weekStart.setHours(0, 0, 0, 0);
+    const sunday = new Date(weekStart);
+    sunday.setDate(weekStart.getDate() - weekStart.getDay() + 7);
+
+    const weekRuns = recentActivities.filter((activity) => {
+      const eventDate = new Date(activity.date);
+      const start = new Date(sunday);
+      start.setDate(sunday.getDate() - 6);
+      return eventDate >= start && eventDate <= sunday;
+    });
+
+    const summary = computeWeeklyAnalysis(weekRuns);
+    return {
+      weekStart: formatDateKey(startOfWeekFromDate(sunday)),
+      totalDistanceKm: summary.totalDistanceKm,
+      sessionCount: summary.sessionCount,
+      acwr: 1.0,
+      load: summary.load,
+      intensity: summary.intensityMinutes
+    };
+  }).reverse();
+
+  const keySessions = recentActivities.slice(0, 5).map((activity) => {
+    const sessionType = classifySession(activity);
+    const interval = computeIntervalQuality(activity);
+    return {
+      sessionType,
+      repCount: interval.repCount,
+      fadePercent: interval.fadePercent,
+      quality: interval.quality,
+      durationMinutes: Math.round((Number(activity.movingTime || 0) / 60) || 0),
+      summary: `${sessionType} session, ${Number(((activity.distance || 0) / 1000)).toFixed(1)} km`
+    };
+  });
+
+  const athleteContext = {
+    athlete: {
+      focus: ['800m', '1500m'],
+      weeklyVolumeKm: Math.round((recentActivities.reduce((sum, activity) => sum + ((activity.distance || 0) / 1000), 0) / Math.max(recentActivities.length || 1, 1)) * 7),
+      keySessions: ['Tue', 'Thu', 'Sat', 'Sun'],
+      trainingBlock: 'build'
+    },
+    goals: goals.map((goal) => ({
+      title: goal.title,
+      type: goal.type,
+      raceDate: goal.raceDate,
+      targetTime: goal.targetTime,
+      targetDistance: goal.targetDistance
+    })),
+    weeks,
+    keySessions,
+    upcomingRaces: goals
+      .filter((goal) => goal.raceDate || goal.type === 'race')
+      .map((goal) => ({
+        name: goal.title,
+        date: goal.raceDate,
+        distance: goal.targetDistance || null
+      })),
+    analysis: {
+      weeklyTrend: 'stable',
+      buildDeload: 'insufficient_data',
+      fatigueRisk: 'insufficient_data',
+      raceReadiness: 'insufficient_data'
+    }
+  };
+
+  const compactContext = buildCoachContext(athleteContext);
+  const messageContext = buildToolResultForPrompt(message, recentActivities);
+  const toolContext = messageContext ? `\nTool result:\n${JSON.stringify(messageContext.result, null, 2)}` : '';
+
+  const systemContext = `${buildSpecialistPrompt(compactContext)}\n\n${buildToolSystemPrompt()}`;
 
   try {
     const messages = [
-      { role: 'system', content: systemContext },
       ...conversationHistory.map(msg => ({
         role: msg.role === 'assistant' ? 'assistant' : 'user',
         content: msg.content
       })),
-      { role: 'user', content: message }
+      { role: 'user', content: `${message}${toolContext}` }
     ];
 
     const completion = await aiComplete({
+      system: systemContext,
       messages,
-      max_tokens: 800
+      max_tokens: 800,
+      feature: 'chat'
     });
 
-    return stripFormatting(completion.choices[0]?.message?.content || 'Sorry, I couldn\'t process that. Can you try rephrasing?');
+    return stripFormatting(completion || 'Sorry, I couldn\'t process that. Can you try rephrasing?');
   } catch (error) {
     console.error('Error in AI chat:', error);
     throw error;
@@ -218,32 +320,46 @@ Provide personalized running advice. Be conversational, supportive, and practica
  * Predict race times based on training
  */
 export async function predictRaceTimes(userId) {
-  const analysis = await analyzeTraining(userId, 90); // Last 3 months
-  
+  const activities = await Activity.findAll({
+    where: {
+      userId,
+      date: { [Op.gte]: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) }
+    },
+    order: [['date', 'DESC']]
+  });
+  const analysis = await analyzeTraining(userId, 90);
+  const profile = buildRecentTrainingProfile(activities);
+
   // Get user's race PBs
   const pbs = await RacePB.findAll({
     where: { userId },
     order: [['date', 'DESC']]
   });
-  
-  if (analysis.totalRuns < 10 && pbs.length === 0) {
+
+  const hasUsefulRecentData = profile.recentRuns >= 4 || (analysis.totalRuns >= 10 && profile.avgPace > 0);
+  if (!hasUsefulRecentData && pbs.length === 0) {
     return { error: 'Need more training data or race PBs for accurate predictions' };
   }
-  
+
   const racePBsText = pbs.length > 0
     ? `\nCurrent Personal Bests:\n${pbs.map(pb => 
         `- ${pb.distance}: ${formatTime(pb.time)} (${new Date(pb.date).toLocaleDateString()})`
       ).join('\n')}`
     : '';
-  
+
+  const paceRangeText = profile.recentRuns > 0
+    ? `\nRecent training profile (last 12 runs):\n- Recent runs: ${profile.recentRuns}\n- Avg pace: ${formatPace(profile.avgPace)}\n- Avg HR: ${Math.round(profile.avgHeartRate || 0)} bpm\n- Pace range: ${formatPace(profile.recentPaceRange.min)} to ${formatPace(profile.recentPaceRange.max)}\n- Quality sessions: ${profile.recentQualityPaces.length}`
+    : '\nRecent training profile: insufficient recent running data';
+
   const context = `
-Based on this runner's training data from the last 90 days, predict realistic race times:
+Based on this runner's recent training data from the last 90 days, predict realistic race times.
 
 Training Summary:
 - Total distance: ${analysis.totalDistance.toFixed(1)} km
 - Total runs: ${analysis.totalRuns}
 - Average pace: ${formatPace(analysis.averagePace)}
-- Weekly average: ${analysis.weeklyAverage.toFixed(1)} km${racePBsText}
+- Weekly average: ${analysis.weeklyAverage.toFixed(1)} km
+- Recent consistency: ${profile.recentRuns} recent runs with ${Math.round(profile.avgHeartRate || 0)} bpm average HR${paceRangeText}${racePBsText}
 
 Provide realistic time predictions for:
 - 800m
@@ -252,7 +368,7 @@ Provide realistic time predictions for:
 - Half Marathon (21.1km)
 - Marathon (42.2km)
 
-${pbs.length > 0 ? 'Use the runner\'s PBs as the primary reference and adjust for current fitness.' : 'Base predictions on current training pace and volume.'}
+${pbs.length > 0 ? 'Use the runner\'s PBs as the primary reference and adjust for current fitness using the recent pace/HR trend.' : 'Base predictions on the runner\'s recent training pace, volume, and aerobic fitness.'}
 
 Format your response as JSON with this structure:
 {
@@ -267,22 +383,16 @@ Format your response as JSON with this structure:
 
   try {
     const completion = await aiComplete({
+      system: 'You are a running coach expert at predicting race times based on training data. Provide realistic, achievable predictions.',
       messages: [
-        { role: 'system', content: 'You are a running coach expert at predicting race times based on training data. Provide realistic, achievable predictions.' },
         { role: 'user', content: context }
       ],
-      max_tokens: 500
+      max_tokens: 500,
+      feature: 'race_predictions',
+      schema: RacePredictionSchema
     });
 
-    const response = completion.choices[0]?.message?.content;
-    if (!response) return { error: 'Could not generate predictions. Please try again.' };
-    // Try to parse JSON from response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    
-    return { predictions: response };
+    return completion;
   } catch (error) {
     console.error('Error predicting race times:', error);
     throw error;
@@ -292,34 +402,127 @@ Format your response as JSON with this structure:
 /**
  * Generate training plan for a goal
  */
+function getMondaySundayMileage(activities = []) {
+  const buckets = new Map();
+
+  activities.forEach((activity) => {
+    if (!activity?.date) return;
+    const date = new Date(activity.date);
+    const weekStart = startOfWeekFromDate(date);
+    const key = formatDateKey(weekStart);
+
+    if (!buckets.has(key)) {
+      buckets.set(key, 0);
+    }
+
+    buckets.set(key, buckets.get(key) + (Number(activity.distance || 0) / 1000));
+  });
+
+  return [...buckets.entries()]
+    .map(([weekStart, totalDistanceKm]) => ({
+      weekStart,
+      totalDistanceKm: Number(totalDistanceKm.toFixed(1))
+    }))
+    .sort((a, b) => new Date(a.weekStart) - new Date(b.weekStart));
+}
+
+function buildNextWeeksTrainingPlan(activities = [], goal = {}) {
+  const recentWeeks = getMondaySundayMileage(activities);
+  const recentVolume = recentWeeks.length
+    ? recentWeeks.slice(-4).reduce((sum, week) => sum + week.totalDistanceKm, 0) / Math.min(recentWeeks.slice(-4).length, 4)
+    : 35;
+  const baseWeeklyDistance = Math.max(25, Number((recentVolume || 35).toFixed(1)));
+  const targetWeeklyDistance = Math.max(25, baseWeeklyDistance + (goal?.goalType === 'race' ? 8 : 0));
+
+  const days = [
+    { day: 'Monday', type: 'Easy', ratio: 0.16 },
+    { day: 'Tuesday', type: 'Workout', ratio: 0.17 },
+    { day: 'Wednesday', type: 'Recovery', ratio: 0.12 },
+    { day: 'Thursday', type: 'Tempo', ratio: 0.18 },
+    { day: 'Friday', type: 'Easy', ratio: 0.1 },
+    { day: 'Saturday', type: 'Long', ratio: 0.22 },
+    { day: 'Sunday', type: 'Easy', ratio: 0.05 }
+  ];
+
+  return Array.from({ length: 4 }, (_, index) => {
+    const weekDistance = Number((targetWeeklyDistance * (1 + index * 0.05)).toFixed(1));
+
+    const runs = days.map((run) => {
+      const distance = Number((weekDistance * run.ratio / 1.1).toFixed(1));
+      const description = run.type === 'Workout'
+        ? 'Track or hill repetitions with controlled effort and relaxed recovery.'
+        : run.type === 'Tempo'
+          ? 'Threshold work with a steady rhythm and relaxed form.'
+          : run.type === 'Long'
+            ? 'Long aerobic run with smooth pacing and time on feet.'
+            : run.type === 'Recovery'
+              ? 'Short shakeout to keep legs fresh and moving.'
+              : 'Easy aerobic mileage to support consistency and recovery.';
+
+      return {
+        day: run.day,
+        type: run.type,
+        distance,
+        description
+      };
+    });
+
+    const lastRunIndex = runs.length - 1;
+    const sumOtherDistances = runs.slice(0, lastRunIndex).reduce((sum, item) => sum + item.distance, 0);
+    const finalDistance = Number((Math.max(3, weekDistance - sumOtherDistances)).toFixed(1));
+    runs[lastRunIndex] = { ...runs[lastRunIndex], distance: finalDistance };
+
+    return {
+      weekNumber: index + 1,
+      totalDistance: weekDistance,
+      runs
+    };
+  });
+}
+
 export async function generateTrainingPlan(userId, goalId) {
-  const goal = await Goal.findByPk(goalId);
-  const analysis = await analyzeTraining(userId);
-  
-  if (!goal) throw new Error('Goal not found');
-  
-  const weeksUntilGoal = goal.raceDate 
-    ? Math.ceil((goal.raceDate - new Date()) / (7 * 24 * 60 * 60 * 1000))
-    : 12; // Default to 12 weeks
-  
+  const goal = goalId ? await Goal.findByPk(goalId) : null;
+  const activities = await Activity.findAll({
+    where: {
+      userId,
+      date: { [Op.gte]: new Date(Date.now() - 120 * 24 * 60 * 60 * 1000) }
+    },
+    order: [['date', 'DESC']]
+  });
+  const analysis = await analyzeTraining(userId, 90);
+
+  if (!goal && activities.length === 0) {
+    throw new Error('Need recent Strava data before generating a plan');
+  }
+
+  const goalConfig = goal || {
+    title: 'Next 4-week build block',
+    type: 'custom',
+    raceType: '5K',
+    targetTime: null,
+    raceDate: null
+  };
+
+  const weeksUntilGoal = goalConfig.raceDate
+    ? Math.ceil((goalConfig.raceDate - new Date()) / (7 * 24 * 60 * 60 * 1000))
+    : 4;
+
+  const plan = buildNextWeeksTrainingPlan(activities, { goalType: goalConfig.type });
   const context = `
-Create a ${weeksUntilGoal}-week training plan for this goal:
-- Goal: ${goal.title}
-- Type: ${goal.type}
-- Race type: ${goal.raceType || 'N/A'}
-- Target time: ${goal.targetTime || 'N/A'}
+Create a ${Math.max(weeksUntilGoal, 4)}-week training plan for this goal:
+- Goal: ${goalConfig.title}
+- Type: ${goalConfig.type}
+- Race type: ${goalConfig.raceType || 'N/A'}
+- Target time: ${goalConfig.targetTime || 'N/A'}
 
 Current training level:
 - Weekly average: ${analysis.weeklyAverage.toFixed(1)} km
 - Average pace: ${formatPace(analysis.averagePace)}
+- Monday-Sunday mileage trend: ${getMondaySundayMileage(activities).slice(-4).map((week) => `${week.weekStart}: ${week.totalDistanceKm}km`).join(' | ') || 'No recent week tracking yet'}
 
-Create a structured, progressive training plan with:
-1. Weekly mileage targets
-2. Key workout types (easy runs, tempo, intervals, long runs)
-3. Recovery days
-4. Progressive overload
+Base the plan on the athlete's recent training volume and keep all weeks aligned to Monday-Sunday tracking.
 
-IMPORTANT: Respond with ONLY valid JSON, no additional text or markdown. Use the exact structure below:
+IMPORTANT: Respond with ONLY valid JSON, no additional text or markdown. Use this exact structure:
 {
   "weeks": [
     {
@@ -337,46 +540,22 @@ Make sure:
 - All strings are properly quoted
 - All property names are in double quotes
 - Numbers are not quoted
+- The plan should cover ${Math.max(weeksUntilGoal, 4)} weeks, with the first week grounded in the runner's recent Monday-Sunday mileage.
 `;
 
   try {
     const completion = await aiComplete({
-      messages: [
-        { role: 'system', content: 'You are an expert running coach. You MUST respond with valid JSON only, no markdown, no explanations, just pure JSON.' },
-        { role: 'user', content: context }
-      ],
-      max_tokens: 2000
+      system: 'You are an expert running coach. You MUST respond with valid JSON only, no markdown, no explanations, just pure JSON. Keep all weekly mileage anchored to Monday-to-Sunday pacing and recovery balance.',
+      messages: [{ role: 'user', content: context }],
+      max_tokens: 2000,
+      feature: 'training_plan',
+      schema: TrainingPlanSchema
     });
 
-    const response = completion.choices[0]?.message?.content;
-    if (!response) throw new Error('AI returned empty response');
-    
-    // Try to extract JSON from the response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        let jsonStr = jsonMatch[0];
-        
-        // Clean up common JSON issues
-        // Remove trailing commas before ] or }
-        jsonStr = jsonStr.replace(/,(\s*[\]}])/g, '$1');
-        // Fix unescaped quotes in strings (basic fix)
-        jsonStr = jsonStr.replace(/:\s*"([^"]*)"([^,\}\]]*)"([^"]*)"(\s*[,\}\]])/g, (match, p1, p2, p3, p4) => {
-          return `: "${p1}\\"${p2}\\"${p3}"${p4}`;
-        });
-        
-        return JSON.parse(jsonStr);
-      } catch (parseError) {
-        console.error('JSON parse error:', parseError);
-        console.error('Response:', response);
-        throw parseError;
-      }
-    }
-    
-    return { plan: response };
+    return completion || { weeks: plan };
   } catch (error) {
     console.error('Error generating training plan:', error);
-    throw error;
+    return { weeks: plan };
   }
 }
 
@@ -526,14 +705,13 @@ IMPORTANT INSTRUCTIONS:
 Respond naturally and warmly, like a coach who genuinely cares:`;
 
     const completion = await aiComplete({
-      messages: [
-        { role: 'system', content: 'You are an emotionally intelligent running coach who excels at voice-based coaching conversations. You understand both the physical and emotional aspects of running. Keep responses conversational, brief (2-3 sentences), and empathetic. Never use emojis or special characters.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 300
+      system: 'You are an emotionally intelligent running coach who excels at voice-based coaching conversations. You understand both the physical and emotional aspects of running. Keep responses conversational, brief (2-3 sentences), and empathetic. Never use emojis or special characters.',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 300,
+      feature: 'voice_coaching'
     });
 
-    const message = stripFormatting(completion.choices[0]?.message?.content || "Great job out there! Keep up the good work.");
+    const message = stripFormatting(completion || "Great job out there! Keep up the good work.");
 
     return {
       message: message.trim(),
@@ -617,5 +795,18 @@ function format(date, formatStr) {
     return `${month} ${day}`;
   }
   return date.toLocaleDateString();
+}
+
+function startOfWeekFromDate(date) {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + diffToMonday);
+  return start;
+}
+
+function formatDateKey(date) {
+  return new Date(date).toISOString().slice(0, 10);
 }
 

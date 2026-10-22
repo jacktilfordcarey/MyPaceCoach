@@ -33,6 +33,7 @@ export const coach = {
   chat: (message, history) => api.post('/coach/chat', { message, history }),
   getPredictions: () => api.get('/coach/predictions'),
   getAnalysis: (days) => api.get('/coach/analysis', { params: { days } }),
+  getAnalysisSnapshots: () => api.get('/coach/analysis/snapshots'),
   voiceCoaching: (data) => api.post('/coach/voice', data)
 };
 

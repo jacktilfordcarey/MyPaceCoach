@@ -7,6 +7,7 @@ import {
   analyzeTraining,
   voiceCoaching
 } from '../services/aiCoach.js';
+import { getRecentAnalysisSnapshots } from '../services/analysisStore.js';
 
 const router = express.Router();
 
@@ -61,6 +62,15 @@ router.get('/analysis', isAuthenticated, async (req, res) => {
     const { days = 30 } = req.query;
     const analysis = await analyzeTraining(req.user.id, parseInt(days));
     res.json(analysis);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/analysis/snapshots', isAuthenticated, async (req, res) => {
+  try {
+    const snapshots = await getRecentAnalysisSnapshots(req.user.id, 12);
+    res.json(snapshots);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

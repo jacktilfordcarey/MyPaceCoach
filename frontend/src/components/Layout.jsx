@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Activity, LayoutDashboard, CalendarRange, MessageCircle, User, LogOut, Menu, X, Trophy, Sun, Moon } from 'lucide-react'
+import { Activity, LayoutDashboard, CalendarRange, MessageCircle, User, LogOut, Menu, X, Trophy, Sun, Moon, TrendingUp } from 'lucide-react'
 import { auth } from '../api'
 import useTheme from '../hooks/useTheme'
 
@@ -30,6 +30,7 @@ export default function Layout({ children, user }) {
 
   const navigation = [
     { name: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
+    { name: 'Analysis', to: '/analysis', icon: TrendingUp },
     { name: 'Activities', to: '/activities', icon: Activity },
     { name: 'AI Coach', to: '/coach', icon: MessageCircle },
     { name: 'Calendar', to: '/calendar', icon: CalendarRange },

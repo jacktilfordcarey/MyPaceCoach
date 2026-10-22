@@ -9,6 +9,7 @@ import Coach from './pages/Coach'
 import Calendar from './pages/Calendar'
 import Profile from './pages/Profile'
 import RacePBs from './pages/RacePBs'
+import Analysis from './pages/Analysis'
 
 function App() {
   const { data: authStatus, isLoading } = useQuery({
@@ -35,6 +36,7 @@ function App() {
     <Layout user={authStatus.user}>
       <Routes>
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/analysis" element={<Analysis />} />
         <Route path="/activities" element={<Activities />} />
         <Route path="/coach" element={<Coach />} />
         <Route path="/calendar" element={<Calendar />} />

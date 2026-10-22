@@ -19,6 +19,7 @@ import './models/Activity.js';
 import './models/Goal.js';
 import './models/RacePB.js';
 import './models/CalendarEvent.js';
+import './models/AnalysisSnapshot.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
